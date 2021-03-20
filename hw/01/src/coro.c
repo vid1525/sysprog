@@ -1,7 +1,7 @@
 #include "coro.h"
 
 static void *allocate_stack(const size_t stack_size) {
-    void *stack = malloc(stack_size);
+    void *stack = calloc(stack_size, sizeof(char));
     if (stack == NULL) {
         return NULL;
     }
@@ -11,9 +11,21 @@ static void *allocate_stack(const size_t stack_size) {
 
 void init_coros(struct coroutines *res, ucontext_t *main_ctxt, const size_t coro_cnt,
         const size_t stack_size) {
-    res->ctxt_arr = calloc(coro_cnt, sizeof(ucontext_t));
-    res->flags = calloc(coro_cnt, sizeof(char));
-    res->index_arr = calloc(coro_cnt, sizeof(size_t));
+    if (!(res->ctxt_arr = calloc(coro_cnt, sizeof(ucontext_t)))) {
+        fprintf(stderr, "Bad alloc\n");
+        exit(1);
+    }
+    if (!(res->flags = calloc(coro_cnt, sizeof(char)))) {
+        free(res->ctxt_arr);
+        fprintf(stderr, "Bad alloc\n");
+        exit(1);
+    }
+    if (!(res->index_arr = calloc(coro_cnt, sizeof(size_t)))) {
+        free(res->ctxt_arr);
+        free(res->flags);
+        fprintf(stderr, "Bad alloc\n");
+        exit(1);
+    }
     res->context_cnt = coro_cnt;
     res->flags_cnt = coro_cnt;
     for (int64_t i = 0; i < coro_cnt; ++i) {
@@ -38,7 +50,7 @@ void init_coros(struct coroutines *res, ucontext_t *main_ctxt, const size_t coro
         res->ctxt_arr[i].uc_stack.ss_size = stack_size;
         res->ctxt_arr[i].uc_link = main_ctxt;
     }
-    
+
     for (size_t i = 0; i < coro_cnt; ++i) {
         res->flags[i] = 1;
         res->index_arr[i] = i;

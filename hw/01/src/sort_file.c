@@ -39,29 +39,46 @@ void sort(const int id, const char *filename, char *flags,
     int64_t len = 0;
     int64_t alloc = MIN_BUF_SIZE;
     uint32_t val;
-    arr = malloc(sizeof(uint32_t) * alloc);
+    FILE *fin;
+
+    if (!(arr = calloc(alloc, sizeof(uint32_t)))) {
+        fprintf(stderr, "Bad alloc\n");
+        exit(1);
+    }
     swapcontext(cur_ctxt, main_ctxt);
-    
-    FILE *fin = fopen(filename, "r");
+
+    if (!(fin = fopen(filename, "r"))) {
+        free(arr);
+        fprintf(stderr, "Bad opening file for reading: %s\n", filename);
+        exit(2);
+    }
     swapcontext(cur_ctxt, main_ctxt);
     while ((fscanf(fin, "%u", &val)) != -1) {
         if (len == alloc) {
             alloc <<= 1u;
-            arr = realloc(arr, alloc * sizeof(uint32_t));
+            if (!(arr = realloc(arr, alloc * sizeof(uint32_t)))) {
+                fprintf(stderr, "Bad alloc\n");
+                exit(1);
+            }
             swapcontext(cur_ctxt, main_ctxt);
         }
         arr[len++] = val;
         swapcontext(cur_ctxt, main_ctxt);
     }
     fclose(fin);
-    
+
     swapcontext(cur_ctxt, main_ctxt);
     quick_sort(arr, 0, len - 1, main_ctxt, cur_ctxt);
 
-    FILE *fout = fopen(filename, "w");
+    FILE *fout;
+    if (!(fout = fopen(filename, "w"))) {
+        free(arr);
+        fprintf(stderr, "Bad opening file for writing: %s\n", filename);
+        exit(2);
+    }
     for (int64_t i = 0; i < len; ++i) {
         fprintf(fout, "%u ", arr[i]);
-	swapcontext(cur_ctxt, main_ctxt);
+        swapcontext(cur_ctxt, main_ctxt);
     }
     fclose(fout);
     free(arr);
