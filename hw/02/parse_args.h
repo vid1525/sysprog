@@ -15,6 +15,8 @@ struct command {
     size_t args_alloc;
 };
 
+void error_msg(FILE *stream, const char *msg, const int status);
+
 void get_buffer(FILE *stream, char **res);
 
 void command_init(struct command *cmd);

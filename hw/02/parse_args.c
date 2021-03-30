@@ -1,11 +1,45 @@
 #include "parse_args.h"
 
+// error message
+
+void error_msg(FILE *stream, const char *msg, const int status) {
+    fprintf(stream, "%s\n", msg);
+    exit(status);
+}
+
+// help functions
+
+char *skip_spaces(char *buf) {
+    while (*buf == ' ') {
+        ++buf;
+    }
+    return buf;
+}
+
+int not_special_chars(const char c) {
+    return c != '>' && c != '<' && c != '|' && c != '&' && c != '\n';
+}
+
+// input command string
+
+static void get_buffer_bracket_case(const char *buf, const size_t size,
+        int *bracket_flag, int *back_slash_flag, const int bracket_type) {
+    if (size > 0 && buf[size - 1] == '\\' && *back_slash_flag) {
+        *back_slash_flag = 0;
+        return;
+    }
+    if (*bracket_flag == bracket_type) {
+        *bracket_flag = 0;
+    } else if (*bracket_flag == 0) {
+        *bracket_flag = bracket_type;
+    }
+}
+
 void get_buffer(FILE *stream, char **res) {
     size_t buf_alloc = 1;
     char *buf = calloc(buf_alloc, sizeof(char));
     if (!buf) {
-        fprintf(stderr, "Bad alloc\n");
-        exit(1);
+        error_msg(stderr, "Bad alloc\n", 1);
     }
     size_t size = 0;
 
@@ -17,8 +51,7 @@ void get_buffer(FILE *stream, char **res) {
             buf_alloc <<= 1u;
             buf = realloc(buf, sizeof(*buf) * buf_alloc);
             if (!buf) {
-                fprintf(stderr, "Bad alloc\n");
-                exit(1);
+                error_msg(stderr, "Bad alloc\n", 1);
             }
         }
 
@@ -39,26 +72,10 @@ void get_buffer(FILE *stream, char **res) {
                 *res = buf;
                 return;
             case '"':
-                if (size > 0 && buf[size - 1] == '\\' && back_slash_flag) {
-                    back_slash_flag = 0;
-                    break;
-                }
-                if (bracket_flag == 1) {
-                    bracket_flag = 0;
-                } else if (bracket_flag == 0) {
-                    bracket_flag = 1;
-                }
+                get_buffer_bracket_case(buf, size, &bracket_flag, &back_slash_flag, 1);
                 break;
             case '\'':
-                if (size > 0 && buf[size - 1] == '\\' && back_slash_flag) {
-                    back_slash_flag = 0;
-                    break;
-                }
-                if (bracket_flag == 2) {
-                    bracket_flag = 0;
-                } else if (bracket_flag == 0) {
-                    bracket_flag = 2;
-                }
+                get_buffer_bracket_case(buf, size, &bracket_flag, &back_slash_flag, 2);
                 break;
             default:
                 break;
@@ -69,47 +86,49 @@ void get_buffer(FILE *stream, char **res) {
     *res = buf;
 }
 
-void command_init(struct command *cmd) {
-    cmd->args = 0;
-    cmd->args_alloc = 1;
-    if (!(cmd->argv = calloc(cmd->args_alloc, sizeof(char *)))) {
-        fprintf(stderr, "Bad alloc\n");
-        exit(1);
-    }
+// help functions working with filenames and commands' names
+
+static int pred_bracket_1(const char c, const int flag) {
+    return (flag || c != '"');
 }
 
-void append_arg(struct command *cmd, char *arg) {
-    if (cmd->args == cmd->args_alloc) {
-        cmd->args_alloc <<= 1u;
-        cmd->argv = realloc(cmd->argv, sizeof(*cmd->argv) * cmd->args_alloc);
-        if (!cmd->argv) {
-            fprintf(stderr, "Bad alloc\n");
-            exit(1);
-        }
-    }
-    cmd->argv[cmd->args++] = arg;
-    for (size_t i = cmd->args; i < cmd->args_alloc; ++i) {
-        cmd->argv[i] = NULL;
-    }
+static int pred_bracket_2(const char c, const int flag) {
+    return (flag || c != '\'');
 }
 
-char *skip_spaces(char *buf) {
-    while (*buf == ' ') {
-        ++buf;
-    }
-    return buf;
+static int pred_default(const char c, const int flag) {
+    return (not_special_chars(c) && (flag || c != ' '));
 }
 
-int not_special_chars(const char c) {
-    return c != '>' && c != '<' && c != '|' && c != '&' && c != '\n';
+// input filename
+
+static char* filename_skip_by_predicate(char *buf, int *flag, 
+        int (*pred)(const char, const int), size_t *alloc, size_t *size, char **res) {
+     while (pred(*buf, *flag)) {
+         if (*size == *alloc) {
+             *alloc <<= 1u;
+             *res = realloc(*res, sizeof(**res) * (*alloc));
+             if (!(*res)) {
+                 error_msg(stderr, "Bad alloc\n", 1);
+             }
+         }
+         if (*buf == '\\' && !(*flag)) {
+             *flag = 1;
+             ++buf;
+         } else {
+             *flag = 0;
+             (*res)[(*size)++] = *buf;
+             ++buf;
+         }
+     }
+     return buf;
 }
 
 char *read_filename(char **buf) {
     *buf = skip_spaces(*buf);
     char *res = calloc(1, sizeof(*res));
     if (!res) {
-        fprintf(stderr, "Bad alloc\n");
-        exit(1);
+        error_msg(stderr, "Bad alloc\n", 1);
     }
     size_t alloc = 1;
     size_t size = 0;
@@ -118,86 +137,49 @@ char *read_filename(char **buf) {
     switch (**buf) {
         case '"':
             ++(*buf);
-            while (flag || **buf != '"') {
-                if (size == alloc) {
-                    alloc <<= 1u;
-                    res = realloc(res, sizeof(*res) * alloc);
-                    if (!res) {
-                        fprintf(stderr, "Bad alloc\n");
-                        exit(1);
-                    }
-                }
-                if (**buf == '\\' && !flag) {
-                    flag = 1;
-                    ++(*buf);
-                } else {
-                    flag = 0;
-                    res[size++] = **buf;
-                    ++(*buf);
-                }
-            }
+            *buf = filename_skip_by_predicate(*buf, &flag, pred_bracket_1, &alloc, &size, &res);
             if (**buf != '"') {
-                fprintf(stderr, "Bad command\n");
-                exit(5);
+                error_msg(stderr, "Bad command\n", 2);
             }
             ++(*buf);
             break;
         case '\'':
             ++(*buf);
-            while (flag || **buf != '\'') {
-                if (size == alloc) {
-                    alloc <<= 1u;
-                    res = realloc(res, sizeof(*res) * alloc);
-                    if (!res) {
-                        fprintf(stderr, "Bad alloc\n");
-                        exit(1);
-                    }
-                }
-                if (**buf == '\\' && !flag) {
-                    flag = 1;
-                    ++(*buf);
-                } else {
-                    flag = 0;
-                    res[size++] = **buf;
-                    ++(*buf);
-                }
-            }
+            *buf = filename_skip_by_predicate(*buf, &flag, pred_bracket_2, &alloc, &size, &res);
             if (**buf != '\'') {
-                fprintf(stderr, "Bad command\n");
-                exit(5);
+                error_msg(stderr, "Bad command\n", 2);
             }
             ++(*buf);
             break;
         default:
-            while (not_special_chars(**buf) && (flag || **buf != ' ')) {
-                if (size == alloc) {
-                    alloc <<= 1u;
-                    res = realloc(res, sizeof(*res) * alloc);
-                    if (!res) {
-                        fprintf(stderr, "Bad alloc\n");
-                        exit(1);
-                    }
-                }
-                if (**buf == '\\' && !flag) {
-                    flag = 1;
-                    ++(*buf);
-                } else {
-                    flag = 0;
-                    res[size++] = **buf;
-                    ++(*buf);
-                }
-            }
+            *buf = filename_skip_by_predicate(*buf, &flag, pred_default, &alloc, &size, &res);
             break;
     }
     if (size == alloc) {
         res = realloc(res, sizeof(*res) * (alloc + 1));
     }
     if (!res) {
-        fprintf(stderr, "Bad alloc\n");
-        exit(1);
+        error_msg(stderr, "Bad alloc\n", 1);
     }
     res[size] = 0;
     return res;
+}
+
+// work with struct command
+
+static int32_t skip_by_predicate(const char *buf, int32_t i, int *flag, 
+        int (*pred)(const char, const int)) {
+    while (pred(buf[i], *flag)) {
+        *flag = 0;
+        if (buf[i] == '\\' && buf[i + 1] == ' ') {
+            *flag = 1;
+        }
+        while (buf[i] == '\\' && buf[i + 1] == '\\') {
+            ++i;
+        }
+        ++i;
+    }
+    return i;
 }
 
 static void update_arg(char **arg) {
@@ -213,9 +195,7 @@ static void update_arg(char **arg) {
         ++i;
         ++j;
     }
-    for (size_t k = i; k < j; ++k) {
-        buf[k] = 0;
-    }
+    memset(buf + i, 0, j - i);
 }
 
 char make_command(struct command *cmd, char **global_buf) {
@@ -231,45 +211,18 @@ char make_command(struct command *cmd, char **global_buf) {
             case '"':
                 ++i;
                 append_arg(cmd, buf + i);
-                while (flag || buf[i] != '"') {
-                    flag = 0;
-                    if (buf[i] == '\\' && buf[i + 1] == '"') {
-                       flag = 1;
-                    }
-                    while (buf[i] == '\\' && buf[i + 1] == '\\') {
-                        ++i;
-                    }
-                    ++i;
-                }
+                i = skip_by_predicate(buf, i, &flag, pred_bracket_1);
                 buf[i++] = 0;
                 break;
             case '\'':
                 ++i;
                 append_arg(cmd, buf + i);
-                while (flag || buf[i] != '\'') {
-                    flag = 0;
-                    if (buf[i] == '\\' && buf[i + 1] == '\'') {
-                       flag = 1;
-                    }
-                    while (buf[i] == '\\' && buf[i + 1] == '\\') {
-                        ++i;
-                    }
-                    ++i;
-                }
+                i = skip_by_predicate(buf, i, &flag, pred_bracket_2);
                 buf[i++] = 0;
                 break;
             default:
                 append_arg(cmd, buf + i);
-                while (not_special_chars(buf[i]) && (flag || buf[i] != ' ')) {
-                    flag = 0;
-                    if (buf[i] == '\\' && buf[i + 1] == ' ') {
-                       flag = 1;
-                    }
-                    while (buf[i] == '\\' && buf[i + 1] == '\\') {
-                        ++i;
-                    }
-                    ++i;
-                }
+                i = skip_by_predicate(buf, i, &flag, pred_default);
                 break;
         }
     }
@@ -284,6 +237,28 @@ char make_command(struct command *cmd, char **global_buf) {
     
     *global_buf = buf + i;
     return res_char;
+}
+
+void command_init(struct command *cmd) {
+    cmd->args = 0;
+    cmd->args_alloc = 1;
+    if (!(cmd->argv = calloc(cmd->args_alloc, sizeof(char *)))) {
+        error_msg(stderr, "Bad alloc\n", 1);
+    }
+}
+
+void append_arg(struct command *cmd, char *arg) {
+    if (cmd->args == cmd->args_alloc) {
+        cmd->args_alloc <<= 1u;
+        cmd->argv = realloc(cmd->argv, sizeof(*cmd->argv) * cmd->args_alloc);
+        if (!cmd->argv) {
+            error_msg(stderr, "Bad alloc\n", 1);
+        }
+    }
+    cmd->argv[cmd->args++] = arg;
+    for (size_t i = cmd->args; i < cmd->args_alloc; ++i) {
+        cmd->argv[i] = NULL;
+    }
 }
 
 void free_command(struct command *cmd) {

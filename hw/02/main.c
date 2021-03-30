@@ -10,19 +10,35 @@
 
 #include "parse_args.h"
 
+void exit_call(struct command cmd) {
+    if (!strcmp(cmd.argv[0], "exit")) {
+        if (cmd.args == 1) {
+            exit(5);
+        } else {
+            int status;
+            sscanf(cmd.argv[1], "%d", &status);
+            exit(status);
+        }
+    }
+}
+
+void execute(struct command cmd) {
+    exit_call(cmd);
+    execvp(cmd.argv[0], cmd.argv);
+    fprintf(stderr, "Bad launch of func %s\n", cmd.argv[0]);
+    exit(2);
+}
+
 int main(void) {
-    int main_loop = 1;
-    while (main_loop) {
+    while (1) {
         char *cmd_buffer;
         get_buffer(stdin, &cmd_buffer);
         size_t cmd_buffer_len = strlen(cmd_buffer) - 1;
-        //printf("%s\n", cmd_buffer);
-        
+
         char *cur_buf = cmd_buffer;
         struct command *cmds = calloc(1, sizeof(*cmds));
         if (!cmds) {
-            fprintf(stderr, "Bad alloc\n");
-            exit(1);
+            error_msg(stderr, "Bad alloc\n", 1);
         }
         size_t cmd_alloc = 1;
         size_t cmd_size = 0;
@@ -39,6 +55,8 @@ int main(void) {
 	int read_pipe = 0;
 	int pipe_turn = 0;
         while (loop_flag) {
+            //printf("$>");
+            //fflush(stdout);
             cur_buf = skip_spaces(cur_buf);
             if (*cur_buf == '\n' || *cur_buf == '#') {
                 break;
@@ -47,8 +65,7 @@ int main(void) {
                 cmd_alloc <<= 1u;
                 cmds = realloc(cmds, sizeof(*cmds) * cmd_alloc);
                 if (!cmds) {
-                    fprintf(stderr, "Bad alloc\n");
-                    exit(1);
+                    error_msg(stderr, "Bad alloc\n", 1);
                 }
             }
             ++cmd_size;
@@ -65,21 +82,10 @@ int main(void) {
                     loop_flag = 0;
                     if (!strcmp(cmds[cmd_size - 1].argv[0], "cd")) {
                         if (cmds[cmd_size - 1].args > 2) {
-                            fprintf(stderr, "Too many args\n");
-                            exit(6);
+                            error_msg(stderr, "Too many args\n", 6);
                         }
-                        /* for command cd ~
-                        if (cmds[cmd_size - 1].args == 1) {
-                            if (chdir("~")) {
-                                fprintf(stderr, "Wrong dir path\n");
-                                exit(5);
-                            }
-                            break;
-                        }
-                        */
                         if (chdir(cmds[cmd_size - 1].argv[1])) {
-                            fprintf(stderr, "Wrong dir path\n");
-                            exit(5);
+                            error_msg(stderr, "Wrong dir path\n", 5);
                         }
                         break;
                     }
@@ -89,18 +95,7 @@ int main(void) {
                             dup2(pipe_fds[1 - pipe_turn][0], 0);
                             close(pipe_fds[1 - pipe_turn][0]);
                         }
-                        if (!strcmp(cmds[cmd_size - 1].argv[0], "exit")) {
-                            if (cmds[cmd_size - 1].args == 1) {
-                                exit(5);
-                            } else {
-                                int status;
-                                sscanf(cmds[cmd_size - 1].argv[1], "%d", &status);
-                                exit(status);
-                            }
-                        }
-                        execvp(cmds[cmd_size - 1].argv[0], cmds[cmd_size - 1].argv);
-                        fprintf(stderr, "Bad launch of func %s\n", cmds[cmd_size - 1].argv[0]);
-                        exit(2);
+                        execute(cmds[cmd_size - 1]);
                     }
                     if (read_pipe) {
                         close(pipe_fds[1 - pipe_turn][0]);
@@ -120,8 +115,7 @@ int main(void) {
                         fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0664);
                     }
                     if (fd < 0) {
-                        fprintf(stderr, "Bad file descriptor\n");
-                        exit(3);
+                        error_msg(stderr, "Bad file descriptor\n", 3);
                     }
                     free(filename);
                     if (cmds[cmd_size - 1].args > 0 && !fork()) {
@@ -132,18 +126,7 @@ int main(void) {
                         }
                         dup2(fd, 1);
                         close(fd);
-                        if (!strcmp(cmds[cmd_size - 1].argv[0], "exit")) {
-                            if (cmds[cmd_size - 1].args == 1) {
-                                exit(5);
-                            } else {
-                                int status;
-                                sscanf(cmds[cmd_size - 1].argv[1], "%d", &status);
-                                exit(status);
-                            }
-                        }
-                        execvp(cmds[cmd_size - 1].argv[0], cmds[cmd_size - 1].argv);
-                        fprintf(stderr, "Bad launch of func %s\n", cmds[cmd_size - 1].argv[0]);
-                        exit(2);
+                        execute(cmds[cmd_size - 1]);
                     }
                     close(fd);
                     if (read_pipe) {
@@ -154,43 +137,33 @@ int main(void) {
                     break;
                 case '|':
                     ++cur_buf;
-                    if (pipe(pipe_fds[pipe_turn])) {
-                        fprintf(stderr, "Bad pipe opening\n");
-                        exit(4);
-                    }
-                    if (cmds[cmd_size - 1].args > 0 && !fork()) {
-                        if (read_pipe) {
-                            close(pipe_fds[1 - pipe_turn][1]);
-                            dup2(pipe_fds[1 - pipe_turn][0], 0);
-                            close(pipe_fds[1 - pipe_turn][0]);
-                        }
-                        close(pipe_fds[pipe_turn][0]);
-                        dup2(pipe_fds[pipe_turn][1], 1);
-                        close(pipe_fds[pipe_turn][1]);
+                    if (*cur_buf == '|') {
                         
-                        if (!strcmp(cmds[cmd_size - 1].argv[0], "exit")) {
-                            if (cmds[cmd_size - 1].args == 1) {
-                                exit(5);
-                            } else {
-                                int status;
-                                sscanf(cmds[cmd_size - 1].argv[1], "%d", &status);
-                                exit(status);
-                            }
+                    } else {
+                        if (pipe(pipe_fds[pipe_turn])) {
+                            error_msg(stderr, "Bad pipe opening\n", 4);
                         }
-                        execvp(cmds[cmd_size - 1].argv[0], cmds[cmd_size - 1].argv);
-                        fprintf(stderr, "Bad launch of func %s\n", cmds[cmd_size - 1].argv[0]);
-                        exit(2);
+                        if (cmds[cmd_size - 1].args > 0 && !fork()) {
+                            if (read_pipe) {
+                                close(pipe_fds[1 - pipe_turn][1]);
+                                dup2(pipe_fds[1 - pipe_turn][0], 0);
+                                close(pipe_fds[1 - pipe_turn][0]);
+                            }
+                            close(pipe_fds[pipe_turn][0]);
+                            dup2(pipe_fds[pipe_turn][1], 1);
+                            close(pipe_fds[pipe_turn][1]);
+                            execute(cmds[cmd_size - 1]);
+                        }
+                        if (read_pipe) {
+                            read_pipe = 0;
+                            close(pipe_fds[1 - pipe_turn][0]);
+                            close(pipe_fds[1 - pipe_turn][1]);
+                        }
+                        read_pipe = 1;
+                        pipe_turn = 1 - pipe_turn;
                     }
-                    if (read_pipe) {
-                        read_pipe = 0;
-                        close(pipe_fds[1 - pipe_turn][0]);
-                        close(pipe_fds[1 - pipe_turn][1]);
-                    }
-                    read_pipe = 1;
-                    pipe_turn = 1 - pipe_turn;
                     break;
                 case '&':
-                    
                     break;
                 default:
                     break;
