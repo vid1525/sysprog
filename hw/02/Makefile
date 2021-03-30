@@ -23,7 +23,7 @@ $(EXECUTABLE): $(OBJS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 test: build
-	python3 checker.py -e ./$(EXECUTABLE)
+	python3 checker.py --max 20 -e ./$(EXECUTABLE)
 
 clean:
 	rm -rf $(EXECUTABLE) *.o
