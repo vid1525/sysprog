@@ -17,7 +17,7 @@ char *skip_spaces(char *buf) {
 }
 
 int not_special_chars(const char c) {
-    return c != '|' && c != '\n' && c != 0;
+    return c != '>' && c != '|' && c != '\n';
 }
 
 // input command string
@@ -86,16 +86,14 @@ int get_buffer(FILE *stream, char **res) {
         }
         buf[size++] = c;
     }
-    if (size == 0 && c == EOF) {
-        return 0;
-    }
-    buf = realloc(buf, sizeof(*buf) * (size + 1));
+    buf = realloc(buf, sizeof(*buf) * (size + 2));
     if (!buf) {
         error_msg(stderr, "Bad alloc\n", 1);
     }
-    buf[size] = 0;
+    buf[size] = '\n';
+    buf[size + 1] = 0;
     *res = buf;
-    return 1;
+    return 0;
 }
 
 // help functions working with filenames and commands' names
@@ -179,21 +177,6 @@ char *read_filename(char **buf) {
 
 // work with struct command
 
-static int32_t skip_by_predicate(const char *buf, int32_t i, int *flag, 
-        int (*pred)(const char, const int)) {
-    while (pred(buf[i], *flag)) {
-        *flag = 0;
-        if (buf[i] == '\\' && buf[i + 1] == ' ') {
-            *flag = 1;
-        }
-        while (buf[i] == '\\' && buf[i + 1] == '\\') {
-            ++i;
-        }
-        ++i;
-    }
-    return i;
-}
-
 static void update_arg(char **arg) {
     char *buf = *arg;
     size_t i = 0;
@@ -216,7 +199,7 @@ char make_command(struct command *cmd, char **global_buf) {
     char *buf = *global_buf;
     int32_t i = 0;
     int flag = 0;
-    while (not_special_chars(buf[i])) {
+    while (not_special_chars(buf[i]) && buf[i]) {
         switch (buf[i]) {
             case ' ':
                 buf[i] = 0;
@@ -225,13 +208,31 @@ char make_command(struct command *cmd, char **global_buf) {
             case '"':
                 ++i;
                 append_arg(cmd, buf + i);
-                i = skip_by_predicate(buf, i, &flag, pred_bracket_1);
+                while (pred_bracket_1(buf[i], flag)) {
+                    flag = 0;
+                    if (buf[i] == '\\' && buf[i + 1] == '"') {
+                        flag = 1;
+                    }
+                    while (buf[i] == '\\' && buf[i + 1] == '\\') {
+                        ++i;
+                    }
+                    ++i;
+                }
                 buf[i++] = 0;
                 break;
             case '\'':
                 ++i;
                 append_arg(cmd, buf + i);
-                i = skip_by_predicate(buf, i, &flag, pred_bracket_2);
+                while (pred_bracket_2(buf[i], flag)) {
+                    flag = 0;
+                    if (buf[i] == '\\' && buf[i + 1] == '\'') {
+                        flag = 1;
+                    }
+                    while (buf[i] == '\\' && buf[i + 1] == '\\') {
+                        ++i;
+                    }
+                    ++i;
+                }
                 buf[i++] = 0;
                 break;
             case '#':
@@ -242,7 +243,16 @@ char make_command(struct command *cmd, char **global_buf) {
                 break;
             default:
                 append_arg(cmd, buf + i);
-                i = skip_by_predicate(buf, i, &flag, pred_default);
+                while (pred_default(buf[i], flag)) {
+                    flag = 0;
+                    if (buf[i] == '\\' && buf[i + 1] == ' ') {
+                        flag = 1;
+                    }
+                    while (buf[i] == '\\' && buf[i + 1] == '\\') {
+                        ++i;
+                    }
+                    ++i;
+                }
                 break;
         }
     }

@@ -7,7 +7,7 @@ CFLAGS	+= -Wswitch-enum -Wunreachable-code -Winit-self
 CFLAGS	+= -Wno-unused-parameter -pedantic -O3 -std=gnu11
 LDFLAGS	=
 
-BASE_SOURCES    = main.c parse_args.c parse_args.h
+BASE_SOURCES    = parse_args.c parse_args.h exec_pipeline.c exec_pipeline.h main.c
 SOURCES		= $(BASE_SOURCES)
 OBJS		= $(SOURCES:.c=.o)
 EXECUTABLE	= task_2
