@@ -37,8 +37,12 @@ int chdir_call(struct command cmd) {
 
 void execute(struct command cmd) {
     if (!strcmp(cmd.argv[0], "true")) {
+        printf("t\n");
+        fflush(stdout);
         exit(0);
     } else if (!strcmp(cmd.argv[0], "false")) {
+        printf("f\n");
+        fflush(stdout);
         exit(1);
     }
     exit_call(cmd);
@@ -46,238 +50,165 @@ void execute(struct command cmd) {
     exit(2);
 }
 
+int skip_before_next_logical(char **cmd_buf) {
+    char *buf = *cmd_buf;
+    while (*buf) {
+        if (*buf == '&') {
+            buf[0] = buf[1] = 0;
+            buf += 2;
+            *cmd_buf = buf;
+            return 0;
+        } else if (*buf == '|') {
+            *buf = 0;
+            ++buf;
+            if (*buf == '|') {
+                *buf = 0;
+                ++buf;
+                *cmd_buf = buf;
+                return 1;
+            }
+        }
+        ++buf;
+    }
+    return -1;
+}
+
+char *execute_pipeline(char *cur_buf, int *command_flag, int *bool_value) {
+    char *cmd_line = cur_buf;
+    *command_flag = skip_before_next_logical(&cur_buf);
+    
+    int pipe_fds[2][2];
+    int read_pipe = 0;
+    int pipe_turn = 0;
+    while (cmd_line < cur_buf) {
+        struct command cmd = {0};
+        command_init(&cmd);
+
+        char c = make_command(&cmd, &cmd_line);
+        pid_t pid;
+        switch (c) {
+            case '\n':
+                break;
+            case '>':
+                char *filename;
+                int fd = -1;
+                if (*cmd_line == '>') {
+                    ++cmd_line;
+                    filename = read_filename(&cmd_line);
+                    fd = open(filename, O_CREAT | O_APPEND | O_WRONLY, 0664);
+                } else {
+                    filename = read_filename(&cmd_line);
+                    fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0664);
+                }
+                free(filename);
+                
+                if (fd < 0) {
+                    error_msg(stderr, "Bad descriptor\n", 4);
+                }
+                
+                
+                break;
+            case '|':
+                if (pipe(fds[pipe_turn])) {
+                    error_msg(stderr, "Bad pipe opening\n", 5);
+                }
+                
+                {
+                    int flag = chdir_call(cmd);
+                    if (flag == 1) {
+                        *bool_value = 1;
+                        return cur_buf;
+                    } else if (flag == 2) {
+                        *bool_value = 0;
+                        return cur_buf;
+                    }
+                }
+                
+                break;
+            default:
+                break;
+        }
+        free_command(&cmd);
+    }
+
+    struct command cmd = {0};
+    command_init(&cmd);
+    
+    make_command(&cmd, &cmd_line);
+    
+    {
+        int flag = chdir_call(cmd);
+        if (flag == 1) {
+            *bool_value = 1;
+            return cur_buf;
+        } else if (flag == 2) {
+            *bool_value = 0;
+            return cur_buf;
+        }
+    }
+    
+    pid_t pid = -1;
+    if (cmd.args > 0 && !(pid = fork())) {
+        execute(cmd);
+        exit(2);
+    }
+    if (pid > 0) {
+        int status;
+        waitpid(pid, &status, 0);
+        *bool_value = status == 0;
+    } else {
+        error_msg(stderr, "Bad command given\n", 7);
+    }
+    free_command(&cmd);
+    return cur_buf;
+}
+
+int execute_logical_commands(char *cmd_buf, const size_t cmd_buf_len) {
+    char *cur_buf = cmd_buf;
+    while (cur_buf < cmd_buf + cmd_buf_len) {
+        int command_flag = 0; // 0 -- and; 1 -- or
+        int bool_value = 0;
+        cur_buf = execute_pipeline(cur_buf, &command_flag, &bool_value);
+        if (bool_value) {
+            if (command_flag == 1) {
+                while (1) {
+                    int c = skip_before_next_logical(&cur_buf);
+                    if (c == 0) {
+                        break;
+                    }
+                    if (c == -1) {
+                        return 1;
+                    }
+                }
+            }
+        } else {
+            if (command_flag == 0) {
+                while (1) {
+                    int c = skip_before_next_logical(&cur_buf);
+                    if (c == 1) {
+                        break;
+                    }
+                    if (c == -1) {
+                        return 1;
+                    }
+                }
+            }
+        }
+        if (command_flag == -1) {
+            break;
+        }
+    }
+    return 0;
+}
+
 int main(void) {
-    while (1) {
+    int loop_flag = 1;
+    while (loop_flag) {
         char *cmd_buffer;
         get_buffer(stdin, &cmd_buffer);
         size_t cmd_buffer_len = strlen(cmd_buffer) - 1;
 
-        char *cur_buf = cmd_buffer;
-        struct command *cmds = calloc(1, sizeof(*cmds));
-        if (!cmds) {
-            error_msg(stderr, "Bad alloc\n", 1);
-        }
-        size_t cmd_alloc = 1;
-        size_t cmd_size = 0;
-
-        if (!cmd_buffer[0]) {
-            free(cmd_buffer);
-            free(cmds);
-            break;
-        }
-        
-        int loop_flag = 1;
-        
-	int pipe_fds[2][2];
-	int read_pipe = 0;
-	int pipe_turn = 0;
-	
-	int prev_or = 0;
-	int prev_and = 0;
-	int or_flag = 0;
-	int and_flag = 0;
-        while (loop_flag) {
-            cur_buf = skip_spaces(cur_buf);
-            if (*cur_buf == '\n' || *cur_buf == '#') {
-                break;
-            }
-            if (cmd_size == cmd_alloc) {
-                cmd_alloc <<= 1u;
-                cmds = realloc(cmds, sizeof(*cmds) * cmd_alloc);
-                if (!cmds) {
-                    error_msg(stderr, "Bad alloc\n", 1);
-                }
-            }
-            ++cmd_size;
-            command_init(&cmds[cmd_size - 1]);
-            
-            char next_char = make_command(&cmds[cmd_size - 1], &cur_buf);
-
-            switch (next_char) {
-                case '\n':
-                    if (cur_buf < cmd_buffer + cmd_buffer_len) {
-                        ++cur_buf;
-                        continue;
-                    }
-                    loop_flag = 0;
-                    if (or_flag || and_flag) {
-                        break;
-                    }
-                    if (chdir_call(cmds[cmd_size - 1])) {
-                        break;
-                    }
-                    if (cmds[cmd_size - 1].args > 0 && !fork()) {
-                        if (read_pipe) {
-                            close(pipe_fds[1 - pipe_turn][1]);
-                            dup2(pipe_fds[1 - pipe_turn][0], 0);
-                            close(pipe_fds[1 - pipe_turn][0]);
-                        }
-                        execute(cmds[cmd_size - 1]);
-                    }
-                    if (read_pipe) {
-                        close(pipe_fds[1 - pipe_turn][0]);
-                        close(pipe_fds[1 - pipe_turn][1]);
-                    }
-                    break;
-                case '>':
-                    ++cur_buf;
-                    int fd;
-                    char *filename;
-                    if (*cur_buf == '>') {
-                        ++cur_buf;
-                        filename = read_filename(&cur_buf);
-                        fd = open(filename, O_CREAT | O_APPEND | O_WRONLY, 0664);
-                    } else {
-                        filename = read_filename(&cur_buf);
-                        fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0664);
-                    }
-                    if (fd < 0) {
-                        error_msg(stderr, "Bad file descriptor\n", 3);
-                    }
-                    free(filename);
-                    if (cmds[cmd_size - 1].args > 0 && !fork()) {
-                        if (read_pipe) {
-                            close(pipe_fds[1 - pipe_turn][1]);
-                            dup2(pipe_fds[1 - pipe_turn][0], 0);
-                            close(pipe_fds[1 - pipe_turn][0]);
-                        }
-                        dup2(fd, 1);
-                        close(fd);
-                        execute(cmds[cmd_size - 1]);
-                    }
-                    close(fd);
-                    if (read_pipe) {
-                        read_pipe = 0;
-                        close(pipe_fds[1 - pipe_turn][0]);
-                        close(pipe_fds[1 - pipe_turn][1]);
-                    }
-                    break;
-                case '|':
-                    ++cur_buf;
-                    if (*cur_buf == '|') {
-                        ++cur_buf;
-                        if (or_flag) {
-                            continue;
-                        }
-                        if (prev_and) {
-                            prev_and = 0;
-                            prev_or = 1;
-                            if (and_flag) {
-                                and_flag = 0;
-                                continue;
-                            }
-                        }
-                        prev_and = 0;
-                        prev_or = 1;
-                        int chdir_flag;
-                        if ((chdir_flag = chdir_call(cmds[cmd_size - 1]))) {
-                            or_flag = chdir_flag % 2;
-                            break;
-                        }
-                        
-                        pid_t pid = -1;
-                        if (cmds[cmd_size - 1].args > 0 && !(pid = fork())) {
-                            if (read_pipe) {
-                                close(pipe_fds[1 - pipe_turn][1]);
-                                dup2(pipe_fds[1 - pipe_turn][0], 0);
-                                close(pipe_fds[1 - pipe_turn][0]);
-                            }
-                            execute(cmds[cmd_size - 1]);
-                        }
-                        if (read_pipe) {
-                            close(pipe_fds[1 - pipe_turn][0]);
-                            close(pipe_fds[1 - pipe_turn][1]);
-                        }
-                        int status;
-                        if (pid > 0) {
-                            waitpid(pid, &status, 0);
-                            if (!WEXITSTATUS(status)) {
-                                or_flag = 1;
-                            }
-                        }
-                    } else {
-                        if (pipe(pipe_fds[pipe_turn])) {
-                            error_msg(stderr, "Bad pipe opening\n", 4);
-                        }
-                        if (cmds[cmd_size - 1].args > 0 && !fork()) {
-                            if (read_pipe) {
-                                close(pipe_fds[1 - pipe_turn][1]);
-                                dup2(pipe_fds[1 - pipe_turn][0], 0);
-                                close(pipe_fds[1 - pipe_turn][0]);
-                            }
-                            close(pipe_fds[pipe_turn][0]);
-                            dup2(pipe_fds[pipe_turn][1], 1);
-                            close(pipe_fds[pipe_turn][1]);
-                            execute(cmds[cmd_size - 1]);
-                        }
-                        if (read_pipe) {
-                            close(pipe_fds[1 - pipe_turn][0]);
-                            close(pipe_fds[1 - pipe_turn][1]);
-                        }
-                        read_pipe = 1;
-                        pipe_turn = 1 - pipe_turn;
-                    }
-                    break;
-                case '&':
-                    ++cur_buf;
-                    if (*cur_buf == '&') {
-                        ++cur_buf;
-                        
-                        if (and_flag) {
-                            continue;
-                        }
-                        
-                        if (prev_or) {
-                            prev_or = 0;
-                            prev_and = 1;
-                            if (or_flag) {
-                                or_flag = 0;
-                                continue;
-                            }
-                        }
-
-                        prev_or = 0;
-                        prev_and = 1;
-                        
-                        int chdir_flag;
-                        if ((chdir_flag = chdir_call(cmds[cmd_size - 1]))) {
-                            or_flag = chdir_flag % 2;
-                            break;
-                        }
-                        pid_t pid = -1;
-                        if (cmds[cmd_size - 1].args > 0 && !(pid = fork())) {
-                            if (read_pipe) {
-                                close(pipe_fds[1 - pipe_turn][1]);
-                                dup2(pipe_fds[1 - pipe_turn][0], 0);
-                                close(pipe_fds[1 - pipe_turn][0]);
-                            }
-                            execute(cmds[cmd_size - 1]);
-                        }
-                        if (read_pipe) {
-                            close(pipe_fds[1 - pipe_turn][0]);
-                            close(pipe_fds[1 - pipe_turn][1]);
-                        }
-                        int status;
-                        if (pid > 0) {
-                            waitpid(pid, &status, 0);
-                            if (WEXITSTATUS(status)) {
-                                and_flag = 1;
-                            }
-                        }
-                    } else {
-                    }
-                    break;
-                default:
-                    break;
-            }
-        }
-        
-        while (wait(NULL) != -1);
-        
-        for (size_t i = 0; i < cmd_size; ++i) {
-            free_command(&cmds[i]);
-        }
-        free(cmds);
+        loop_flag = execute_logical_commands(cmd_buffer, cmd_buffer_len);
         free(cmd_buffer);
     }
     return 0;

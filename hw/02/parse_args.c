@@ -17,7 +17,7 @@ char *skip_spaces(char *buf) {
 }
 
 int not_special_chars(const char c) {
-    return c != '>' && c != '<' && c != '|' && c != '&' && c != '\n';
+    return c != '|' && c != '\n' && c != 0;
 }
 
 // input command string
@@ -67,8 +67,7 @@ void get_buffer(FILE *stream, char **res) {
                     buf[size++] = '\n';
                     continue;
                 }
-                buf[size] = '\n';
-                memset(buf + size + 1, 0, sizeof(*buf) * (buf_alloc - size - 1));
+                buf[size] = 0;
                 *res = buf;
                 return;
             case '"':
@@ -82,7 +81,11 @@ void get_buffer(FILE *stream, char **res) {
         }
         buf[size++] = c;
     }
-    memset(buf + size + 1, 0, sizeof(*buf) * (buf_alloc - size - 1));
+    buf = realloc(buf, sizeof(*buf) * (size + 1));
+    if (!buf) {
+        error_msg(stderr, "Bad alloc\n", 1);
+    }
+    buf[size] = 0;
     *res = buf;
 }
 
@@ -195,7 +198,9 @@ static void update_arg(char **arg) {
         ++i;
         ++j;
     }
-    memset(buf + i, 0, j - i);
+    if (i < j) {
+        buf[i] = 0;
+    }
 }
 
 char make_command(struct command *cmd, char **global_buf) {
@@ -226,7 +231,8 @@ char make_command(struct command *cmd, char **global_buf) {
                 break;
         }
     }
-    cmd->argv[cmd->args] = NULL;
+    append_arg(cmd, NULL);
+    --cmd->args;
 
     char res_char = buf[i];
     buf[i] = 0;
@@ -256,9 +262,6 @@ void append_arg(struct command *cmd, char *arg) {
         }
     }
     cmd->argv[cmd->args++] = arg;
-    for (size_t i = cmd->args; i < cmd->args_alloc; ++i) {
-        cmd->argv[i] = NULL;
-    }
 }
 
 void free_command(struct command *cmd) {
