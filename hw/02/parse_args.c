@@ -35,7 +35,7 @@ static void get_buffer_bracket_case(const char *buf, const size_t size,
     }
 }
 
-void get_buffer(FILE *stream, char **res) {
+int get_buffer(FILE *stream, char **res) {
     size_t buf_alloc = 1;
     char *buf = calloc(buf_alloc, sizeof(char));
     if (!buf) {
@@ -67,9 +67,14 @@ void get_buffer(FILE *stream, char **res) {
                     buf[size++] = '\n';
                     continue;
                 }
-                buf[size] = 0;
+                buf = realloc(buf, sizeof(*buf) * (size + 2));
+                if (!buf) {
+                    error_msg(stderr, "Bad alloc\n", 1);
+                }
+                buf[size] = '\n';
+                buf[size + 1] = 0;
                 *res = buf;
-                return;
+                return 1;
             case '"':
                 get_buffer_bracket_case(buf, size, &bracket_flag, &back_slash_flag, 1);
                 break;
@@ -81,12 +86,16 @@ void get_buffer(FILE *stream, char **res) {
         }
         buf[size++] = c;
     }
+    if (size == 0 && c == EOF) {
+        return 0;
+    }
     buf = realloc(buf, sizeof(*buf) * (size + 1));
     if (!buf) {
         error_msg(stderr, "Bad alloc\n", 1);
     }
     buf[size] = 0;
     *res = buf;
+    return 1;
 }
 
 // help functions working with filenames and commands' names
@@ -224,6 +233,12 @@ char make_command(struct command *cmd, char **global_buf) {
                 append_arg(cmd, buf + i);
                 i = skip_by_predicate(buf, i, &flag, pred_bracket_2);
                 buf[i++] = 0;
+                break;
+            case '#':
+                while (not_special_chars(buf[i])) {
+                    buf[i] = 0;
+                    ++i;
+                }
                 break;
             default:
                 append_arg(cmd, buf + i);

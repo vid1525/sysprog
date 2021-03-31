@@ -37,12 +37,8 @@ int chdir_call(struct command cmd) {
 
 void execute(struct command cmd) {
     if (!strcmp(cmd.argv[0], "true")) {
-        printf("t\n");
-        fflush(stdout);
         exit(0);
     } else if (!strcmp(cmd.argv[0], "false")) {
-        printf("f\n");
-        fflush(stdout);
         exit(1);
     }
     exit_call(cmd);
@@ -70,6 +66,7 @@ int skip_before_next_logical(char **cmd_buf) {
         }
         ++buf;
     }
+    *cmd_buf = buf;
     return -1;
 }
 
@@ -85,11 +82,40 @@ char *execute_pipeline(char *cur_buf, int *command_flag, int *bool_value) {
         command_init(&cmd);
 
         char c = make_command(&cmd, &cmd_line);
-        pid_t pid;
         switch (c) {
             case '\n':
+                ++cmd_line;
+                
+                {
+                    if (chdir_call(cmd)) {
+                        *bool_value = 0;
+                        if (read_pipe) {
+		            close(pipe_fds[1 - pipe_turn][0]);
+		            close(pipe_fds[1 - pipe_turn][1]);
+		        }
+		        free_command(&cmd);
+		        return cur_buf;
+                    }
+                }
+
+                if (cmd.args > 0 && !fork()) {
+                    if (read_pipe) {
+                        close(pipe_fds[1 - pipe_turn][1]);
+                        dup2(pipe_fds[1 - pipe_turn][0], 0);
+                        close(pipe_fds[1 - pipe_turn][0]);
+                    }
+                    execute(cmd);
+                }
+                
+                if (read_pipe) {
+                    read_pipe = 0;
+                    close(pipe_fds[1 - pipe_turn][0]);
+                    close(pipe_fds[1 - pipe_turn][1]);
+                }
+
                 break;
             case '>':
+                ++cmd_line;
                 char *filename;
                 int fd = -1;
                 if (*cmd_line == '>') {
@@ -106,64 +132,89 @@ char *execute_pipeline(char *cur_buf, int *command_flag, int *bool_value) {
                     error_msg(stderr, "Bad descriptor\n", 4);
                 }
                 
+                {
+                    if (chdir_call(cmd)) {
+                        *bool_value = 0;
+                        if (read_pipe) {
+		            close(pipe_fds[1 - pipe_turn][0]);
+		            close(pipe_fds[1 - pipe_turn][1]);
+		        }
+		        free_command(&cmd);
+		        return cur_buf;
+                    }
+                }
+
+                if (cmd.args > 0 && !fork()) {
+                    if (read_pipe) {
+                        close(pipe_fds[1 - pipe_turn][1]);
+                        dup2(pipe_fds[1 - pipe_turn][0], 0);
+                        close(pipe_fds[1 - pipe_turn][0]);
+                    }
+                    dup2(fd, 1);
+                    close(fd);
+                    execute(cmd);
+                }
+                close(fd);
+                
+                if (read_pipe) {
+                    read_pipe = 0;
+                    close(pipe_fds[1 - pipe_turn][0]);
+                    close(pipe_fds[1 - pipe_turn][1]);
+                }
                 
                 break;
             case '|':
-                if (pipe(fds[pipe_turn])) {
+                ++cmd_line;
+                if (pipe(pipe_fds[pipe_turn])) {
                     error_msg(stderr, "Bad pipe opening\n", 5);
                 }
-                
+
                 {
-                    int flag = chdir_call(cmd);
-                    if (flag == 1) {
-                        *bool_value = 1;
-                        return cur_buf;
-                    } else if (flag == 2) {
+                    if (chdir_call(cmd)) {
                         *bool_value = 0;
-                        return cur_buf;
+                        if (read_pipe) {
+		            close(pipe_fds[1 - pipe_turn][0]);
+		            close(pipe_fds[1 - pipe_turn][1]);
+		        }
+		        free_command(&cmd);
+		        return cur_buf;
                     }
                 }
+
+                if (cmd.args > 0 && !fork()) {
+                    if (read_pipe) {
+                        close(pipe_fds[1 - pipe_turn][1]);
+                        dup2(pipe_fds[1 - pipe_turn][0], 0);
+                        close(pipe_fds[1 - pipe_turn][0]);
+                    }
+                    close(pipe_fds[pipe_turn][0]);
+                    dup2(pipe_fds[pipe_turn][1], 1);
+                    close(pipe_fds[pipe_turn][1]);
+                    execute(cmd);
+                }
                 
+                if (read_pipe) {
+                    close(pipe_fds[1 - pipe_turn][0]);
+                    close(pipe_fds[1 - pipe_turn][1]);
+                }
+                pipe_turn = 1 - pipe_turn;
                 break;
             default:
                 break;
         }
         free_command(&cmd);
     }
-
-    struct command cmd = {0};
-    command_init(&cmd);
-    
-    make_command(&cmd, &cmd_line);
-    
     {
-        int flag = chdir_call(cmd);
-        if (flag == 1) {
-            *bool_value = 1;
-            return cur_buf;
-        } else if (flag == 2) {
-            *bool_value = 0;
-            return cur_buf;
+        int status;
+        *bool_value = 0;
+        while (wait(&status) > 0) {
+            *bool_value = (*bool_value || (status == 0));
         }
     }
-    
-    pid_t pid = -1;
-    if (cmd.args > 0 && !(pid = fork())) {
-        execute(cmd);
-        exit(2);
-    }
-    if (pid > 0) {
-        int status;
-        waitpid(pid, &status, 0);
-        *bool_value = status == 0;
-    } else {
-        error_msg(stderr, "Bad command given\n", 7);
-    }
-    free_command(&cmd);
     return cur_buf;
 }
 
-int execute_logical_commands(char *cmd_buf, const size_t cmd_buf_len) {
+void execute_logical_commands(char *cmd_buf, const size_t cmd_buf_len) {
     char *cur_buf = cmd_buf;
     while (cur_buf < cmd_buf + cmd_buf_len) {
         int command_flag = 0; // 0 -- and; 1 -- or
@@ -177,7 +228,7 @@ int execute_logical_commands(char *cmd_buf, const size_t cmd_buf_len) {
                         break;
                     }
                     if (c == -1) {
-                        return 1;
+                        return;
                     }
                 }
             }
@@ -189,7 +240,7 @@ int execute_logical_commands(char *cmd_buf, const size_t cmd_buf_len) {
                         break;
                     }
                     if (c == -1) {
-                        return 1;
+                        return;
                     }
                 }
             }
@@ -198,17 +249,17 @@ int execute_logical_commands(char *cmd_buf, const size_t cmd_buf_len) {
             break;
         }
     }
-    return 0;
 }
 
 int main(void) {
-    int loop_flag = 1;
-    while (loop_flag) {
+    while (1) {
         char *cmd_buffer;
-        get_buffer(stdin, &cmd_buffer);
+        if (!get_buffer(stdin, &cmd_buffer)) {
+            break;
+        }
         size_t cmd_buffer_len = strlen(cmd_buffer) - 1;
 
-        loop_flag = execute_logical_commands(cmd_buffer, cmd_buffer_len);
+        execute_logical_commands(cmd_buffer, cmd_buffer_len);
         free(cmd_buffer);
     }
     return 0;

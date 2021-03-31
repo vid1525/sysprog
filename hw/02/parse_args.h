@@ -17,7 +17,7 @@ struct command {
 
 void error_msg(FILE *stream, const char *msg, const int status);
 
-void get_buffer(FILE *stream, char **res);
+int get_buffer(FILE *stream, char **res);
 
 void command_init(struct command *cmd);
 

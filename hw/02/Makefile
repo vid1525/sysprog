@@ -4,7 +4,7 @@ CFLAGS	+= -W -Wall -Wextra -Werror -Wfloat-equal
 CFLAGS	+= -Wundef -Wpointer-arith -Wcast-align -Wshadow
 CFLAGS	+= -Wstrict-overflow=5 -Wwrite-strings -Waggregate-return
 CFLAGS	+= -Wswitch-enum -Wunreachable-code -Winit-self
-CFLAGS	+= -Wno-unused-parameter -pedantic -O3
+CFLAGS	+= -Wno-unused-parameter -pedantic -O3 -std=gnu11
 LDFLAGS	=
 
 BASE_SOURCES    = main.c parse_args.c parse_args.h
